@@ -278,36 +278,34 @@ public final class YamlConfigurationLoader extends AbstractConfigurationLoader<C
         }
     }
 
-    private final ThreadLocal<YamlConstructor> constructor;
-    private final ThreadLocal<Yaml> yaml;
+    private final LoaderOptions loaderOpts;
+    private final DumperOptions dumperOpts;
 
     private YamlConfigurationLoader(final Builder builder) {
         super(builder, new CommentHandler[] {CommentHandlers.HASH});
         final boolean comments = builder.commentsEnabled();
-        final LoaderOptions loaderOpts = new LoaderOptions()
+        this.loaderOpts = new LoaderOptions()
             .setAcceptTabs(true)
             .setProcessComments(comments);
-        loaderOpts.setCodePointLimit(Integer.MAX_VALUE);
+        this.loaderOpts.setCodePointLimit(Integer.MAX_VALUE);
 
-        final DumperOptions opts = builder.options;
+        final DumperOptions opts = this.dumperOpts = builder.options;
         opts.setDefaultFlowStyle(NodeStyle.asSnakeYaml(builder.nodeStyle()));
         opts.setProcessComments(comments);
         opts.setWidth(builder.lineLength());
         opts.setIndent(builder.indent());
         opts.setIndicatorIndent(builder.indent());
         opts.setIndentWithIndicator(true);
-        // the constructor needs ConfigurationOptions, which is only available when called (loadInternal)
-        this.constructor = ThreadLocal.withInitial(() -> new YamlConstructor(loaderOpts));
-        this.yaml = ThreadLocal.withInitial(() -> new Yaml(this.constructor.get(), new YamlRepresenter(true, opts), opts, loaderOpts));
     }
 
     @Override
     protected void loadInternal(final CommentedConfigurationNode node, final BufferedReader reader) {
-        // the constructor needs ConfigurationOptions for the to be created nodes
-        // and since it's a thread-local, this won't cause any issues
-        this.constructor.get().options = node.options();
+        // yaml instances are created per call to avoid leaking thread-locals
+        final YamlConstructor constructor = new YamlConstructor(this.loaderOpts);
+        constructor.options = node.options();
+        final Yaml yaml = new Yaml(constructor, new YamlRepresenter(true, this.dumperOpts), this.dumperOpts, this.loaderOpts);
 
-        @Nullable CommentedConfigurationNode loaded = this.yaml.get().load(reader);
+        @Nullable CommentedConfigurationNode loaded = yaml.load(reader);
         // when a file exists but is empty (or if the file only exists of comments), the first event will be StreamEnd.
         // getSingleNode will return null, getSingleData uses the Constructor of Tag Null, which just returns null.
         // So we have to map null to an empty root node.
@@ -319,7 +317,8 @@ public final class YamlConfigurationLoader extends AbstractConfigurationLoader<C
 
     @Override
     protected void saveInternal(final ConfigurationNode node, final Writer writer) {
-        this.yaml.get().dump(node, writer);
+        final Yaml yaml = new Yaml(new YamlConstructor(this.loaderOpts), new YamlRepresenter(true, this.dumperOpts), this.dumperOpts, this.loaderOpts);
+        yaml.dump(node, writer);
     }
 
     @Override
